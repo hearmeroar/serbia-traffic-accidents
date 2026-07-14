@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Serbia Traffic Accidents Dashboard</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+  <h1>Serbia Traffic Accident Trends</h1>
+  <p class="sub">Data from the Serbian open data portal (data.gov.rs), Ministry of Interior. Covers 2015&ndash;2026 (both boundary years are partial &mdash; see note below).</p>
+
+  <div class="norm-toggle" id="normToggle">
+    <button class="norm-btn active" data-mode="absolute">Absolute</button>
+    <button class="norm-btn" data-mode="per1000">Per 1,000 vehicles</button>
+  </div>
+  <div class="stats-row" id="statsRow"></div>
+  <p class="norm-note" id="normNote" hidden>Vehicle fleet size is an estimate, not official year-by-year RZS data: interpolated/extrapolated at a constant ~3.4%/year from two confirmed passenger-car counts (2015: 1,833,219; 2023: 2,389,105).</p>
+
+  <div class="card">
+    <div class="card-actions">
+      <label class="switch" id="weatherToggle" title="Overlay temperature and precipitation on the weekly chart">
+        <input type="checkbox" id="weatherCheckbox">
+        <span class="switch-track"><span class="switch-thumb"></span></span>
+        <span class="switch-text" id="weatherToggleText">Weather</span>
+      </label>
+      <button class="table-toggle" id="toggleTable">Table</button>
+    </div>
+    <h2 id="chartTitle">Accidents by year, split by severity</h2>
+    <p class="card-sub" id="chartSub">Bar height = total accidents in the period. Segments stack by severity, lowest to highest.</p>
+
+    <div class="range-picker" id="rangePicker">
+      <button class="range-trigger" id="rangeTrigger" disabled>
+        <svg class="cal-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.2"/><line x1="1.5" y1="6" x2="14.5" y2="6" stroke="currentColor" stroke-width="1.2"/><line x1="4.5" y1="1" x2="4.5" y2="3.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><line x1="11.5" y1="1" x2="11.5" y2="3.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+        <span id="triggerLabel">All time &middot; Year</span>
+        <svg class="chev" viewBox="0 0 10 6" width="10" height="6" aria-hidden="true"><path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+
+      <div class="range-popover" id="rangePopover" hidden>
+        <div class="popover-label">Date range</div>
+        <button class="preset-select" id="presetSelect">
+          <span id="presetSelectLabel">All time</span>
+          <svg class="chev" viewBox="0 0 10 6" width="10" height="6" aria-hidden="true"><path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="preset-list" id="presetList" hidden></div>
+
+        <div class="date-inputs">
+          <input type="text" id="fromText" class="date-text" inputmode="numeric" placeholder="DD.MM.YYYY">
+          <span class="date-sep">&ndash;</span>
+          <input type="text" id="toText" class="date-text" inputmode="numeric" placeholder="DD.MM.YYYY">
+        </div>
+
+        <div class="calendar">
+          <div class="cal-header">
+            <button class="cal-nav" id="calPrev" aria-label="Previous month">&#8249;</button>
+            <span id="calMonthLabel"></span>
+            <button class="cal-nav" id="calNext" aria-label="Next month">&#8250;</button>
+          </div>
+          <div class="cal-weekdays">
+            <span>Mo</span><span>Tu</span><span>We</span><span>Th</span><span>Fr</span><span>Sa</span><span>Su</span>
+          </div>
+          <div class="cal-grid" id="calGrid"></div>
+        </div>
+
+        <div class="granularity-row" id="granularityRow">
+          <button class="gran-btn active" data-range="year">Year</button>
+          <button class="gran-btn" data-range="month">Month</button>
+          <button class="gran-btn" data-range="week">Week</button>
+          <button class="gran-btn" data-range="day">Day</button>
+        </div>
+
+        <button class="apply-btn-full" id="applyBtn">Apply</button>
+      </div>
+    </div>
+
+    <div class="geo-filter" id="geoFilter">
+      <label class="select-trigger">
+        <svg class="pin-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M8 1.5c-2.5 0-4.5 2-4.5 4.5 0 3.2 4.5 8.5 4.5 8.5s4.5-5.3 4.5-8.5c0-2.5-2-4.5-4.5-4.5z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><circle cx="8" cy="6" r="1.6" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
+        <select class="geo-select" id="regionSelect" disabled>
+          <option value="">All regions</option>
+        </select>
+        <svg class="chev" viewBox="0 0 10 6" width="10" height="6" aria-hidden="true"><path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </label>
+      <label class="select-trigger">
+        <svg class="pin-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M8 1.5c-2.5 0-4.5 2-4.5 4.5 0 3.2 4.5 8.5 4.5 8.5s4.5-5.3 4.5-8.5c0-2.5-2-4.5-4.5-4.5z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><circle cx="8" cy="6" r="1.6" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
+        <select class="geo-select" id="muniSelect" disabled>
+          <option value="">All municipalities</option>
+        </select>
+        <svg class="chev" viewBox="0 0 10 6" width="10" height="6" aria-hidden="true"><path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </label>
+    </div>
+    <p class="geo-note" id="geoNote" hidden></p>
+
+    <div class="legend">
+      <div class="legend-item"><span class="legend-swatch" style="background:var(--sev-1)"></span>Property damage only</div>
+      <div class="legend-item"><span class="legend-swatch" style="background:var(--sev-2)"></span>Injuries</div>
+      <div class="legend-item"><span class="legend-swatch" style="background:var(--sev-3)"></span>Fatalities</div>
+      <div class="legend-item" id="holidayLegendItem"><span class="legend-swatch dot" style="background:var(--holiday-marker)"></span>Public holiday <span class="hint" title="Shown at Week and Day scales only — Year and Month bars are too coarse for individual holidays to be meaningful.">?</span></div>
+      <div class="legend-item" id="weatherLegendTemp" hidden><span class="legend-swatch" style="background:var(--weather-temp)"></span>Avg temperature (°C, right axis)</div>
+      <div class="legend-item" id="weatherLegendPrecip" hidden><span class="legend-swatch" style="background:var(--weather-precip)"></span>Precipitation (mm)</div>
+    </div>
+
+    <div id="chartHost" style="position:relative;">
+      <svg id="chart" viewBox="0 0 932 380" preserveAspectRatio="xMidYMid meet"></svg>
+      <div class="tooltip" id="tooltip"></div>
+      <div class="empty-msg" id="emptyMsg" hidden>No accidents recorded for this selection.</div>
+    </div>
+    <p class="foot-note">* 2015 is partial (data collection ramped up over the year); 2026 covers January&ndash;May only. Values for these periods are not directly comparable to full periods.</p>
+    <div class="table-scroll">
+      <table class="data-table" id="dataTable">
+        <thead id="tableHead"></thead>
+        <tbody id="tableBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <p class="app-foot">Built from local aggregates in <code>data/*.json</code>. Static site &mdash; no build step required.</p>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

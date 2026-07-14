@@ -1,0 +1,10 @@
+{
+  "name": "serbia-traffic-accidents-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Static dashboard of Serbian traffic accident trends (year/month/week/day) sourced from data.gov.rs",
+  "scripts": {
+    "dev": "python3 -m http.server 8080",
+    "start": "npx serve ."
+  }
+}
