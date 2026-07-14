@@ -20,7 +20,7 @@ Static site, no build step: `index.html` + `style.css` + `app.js`, data loaded v
 
 - All UI copy is **in English** (chat conversation stays Russian, app is English). Code comments in English too.
 - Run: `cd app && npm run dev` (alias for `python3 -m http.server 8080`) → http://localhost:8080.
-- Deploy: any static host with root = `app/`, no build command (see `app/README.md`).
+- Deploy: any static host with root = `app/`, no build command (see `app/README.md`). For platforms that only run a Python/WSGI process (e.g. hosts requiring a `Procfile`/`gunicorn`), `wsgi.py` at the repo root is a thin Flask wrapper serving the same `app/` files unchanged (`static_folder=app/`, `/` → `index.html`) — no app logic lives there, it's purely a hosting-compatibility shim. Run with `gunicorn wsgi:app` (see `Procfile`/`requirements.txt`).
 
 ### Chart / range picker
 - Default view on load is **Week**, not Year (per user preference). Year, Month, Week render as a stacked bar chart. Day is dynamic: bars when the visible window is ≤150 points (e.g. a narrowed custom range), area when wider (e.g. "All time" ≈ 4169 points is too dense for bars) — see `DAY_BAR_THRESHOLD` in app.js.
