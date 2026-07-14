@@ -149,29 +149,53 @@ let geoIndex = null;
 let activeGeoRaw = null; // null = nationwide; otherwise a {yearly,monthly,weekly,daily} bundle for one region/municipality
 const geoCache = { region: {}, muni: {} };
 
-let currentRange = 'year';
+let currentRange = 'month';
 let currentWindow = null;
 let normMode = 'absolute';
 
-let weatherData = null;
-let weatherMap = null;
+let weatherLoaded = false;
 let weatherEnabled = false;
+const weatherMaps = { year: null, month: null, week: null, day: null };
 
-async function ensureWeatherLoaded() {
-  if (weatherData) return weatherData;
-  weatherData = await fetch('data/weather_weekly.json').then(r => r.json());
-  weatherMap = new Map(weatherData.map(w => [`${w.iso_year}-${w.iso_week}`, w]));
-  return weatherData;
+function weatherRowKey(range, row) {
+  if (range === 'year') return String(row.year);
+  if (range === 'month') return `${row.year}-${row.month}`;
+  if (range === 'week') return `${row.iso_year}-${row.iso_week}`;
+  return row.date;
+}
+function weatherKeyForPoint(range, p) {
+  if (range === 'year') return String(p.startDate.getUTCFullYear());
+  if (range === 'month') return `${p.startDate.getUTCFullYear()}-${p.startDate.getUTCMonth() + 1}`;
+  if (range === 'week') return `${p.isoYear}-${p.isoWeek}`;
+  return p.full;
 }
 
-let pendingRange = 'year';
+async function ensureWeatherLoaded() {
+  if (weatherLoaded) return;
+  const [year, month, week, day] = await Promise.all([
+    fetch('data/weather_yearly.json').then(r => r.json()),
+    fetch('data/weather_monthly.json').then(r => r.json()),
+    fetch('data/weather_weekly.json').then(r => r.json()),
+    fetch('data/weather_daily.json').then(r => r.json()),
+  ]);
+  weatherMaps.year = new Map(year.map(w => [weatherRowKey('year', w), w]));
+  weatherMaps.month = new Map(month.map(w => [weatherRowKey('month', w), w]));
+  weatherMaps.week = new Map(week.map(w => [weatherRowKey('week', w), w]));
+  weatherMaps.day = new Map(day.map(w => [weatherRowKey('day', w), w]));
+  weatherLoaded = true;
+}
+
+let pendingRange = 'month';
 let pendingWindow = null;
 let pendingPresetKey = 'all';
 let calendarMonth = null;
 let pickAnchor = null;
 let hoverDate = null;
 
-function fmt(n) { return Math.round(n).toLocaleString('en-US'); }
+function fmt(n) {
+  if (Number.isInteger(n)) return n.toLocaleString('en-US');
+  return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
 function pad2(n) { return String(n).padStart(2, '0'); }
 function dateUTC(y, m, d) { return new Date(Date.UTC(y, m, d)); }
 function parseISODate(s) { const [y, m, d] = s.split('-').map(Number); return dateUTC(y, m - 1, d); }
@@ -334,24 +358,31 @@ function niceStep(roughStep) {
   else if (residual < 3) niceResidual = 2;
   else if (residual < 7) niceResidual = 5;
   else niceResidual = 10;
-  // Counts are always integers, so a sub-1 step (possible for small roughStep,
-  // e.g. a single quiet day) would round to 0 on every iteration and spin
-  // computeTicks' loop forever. Floor it at 1.
-  return Math.max(1, niceResidual * magnitude);
+  return niceResidual * magnitude;
 }
 
-function computeTicks(maxVal, targetCount) {
-  const step = niceStep(maxVal / targetCount);
+// integerSteps=true (accident counts): step is rounded to a whole number and
+// floored at 1 — a sub-1 step would otherwise round to 0 on every iteration and
+// spin the tick loop forever (hit this with a single quiet day). integerSteps=false
+// (per-1,000-vehicles rates, which are small decimals) keeps the raw fractional
+// step; accumulation stays exact plain addition either way, so no rounding-induced
+// zero-step risk there.
+function computeTicks(maxVal, targetCount, integerSteps) {
+  let step = niceStep(maxVal / targetCount);
+  if (integerSteps) step = Math.max(1, Math.round(step));
   const ticks = [0];
-  while (ticks[ticks.length - 1] < maxVal) ticks.push(Math.round(ticks[ticks.length - 1] + step));
+  while (ticks[ticks.length - 1] < maxVal) ticks.push(ticks[ticks.length - 1] + step);
   return { ticks, yMax: ticks[ticks.length - 1] };
 }
 
 function tickText(v) {
   if (v === 0) return '0';
-  if (v % 1000 === 0) return (v / 1000) + 'k';
-  if (v >= 1000) return (v / 1000).toFixed(1) + 'k';
-  return String(v);
+  if (Number.isInteger(v)) {
+    if (v % 1000 === 0) return (v / 1000) + 'k';
+    if (v >= 1000) return (v / 1000).toFixed(1) + 'k';
+    return String(v);
+  }
+  return Number(v.toPrecision(3)).toString();
 }
 
 function el(tag, attrs) {
@@ -498,8 +529,8 @@ function renderTempLine(svg, points, xFn) {
 }
 
 function renderBarChart(svg, points, showHolidays, weatherOn) {
-  const maxTotal = Math.max(...points.map(d => d.total), 1);
-  const { ticks, yMax } = computeTicks(maxTotal, 5);
+  const maxTotal = Math.max(...points.map(d => d.total)) || 1;
+  const { ticks, yMax } = computeTicks(maxTotal, 5, normMode !== 'per1000');
   const yScale = v => marginT + plotH - (v / yMax) * plotH;
 
   ticks.forEach(v => {
@@ -591,9 +622,9 @@ function renderBarChart(svg, points, showHolidays, weatherOn) {
   }
 }
 
-function renderAreaChart(svg, points, showHolidays) {
-  const maxTotal = Math.max(...points.map(d => d.total), 1);
-  const { ticks, yMax } = computeTicks(maxTotal, 5);
+function renderAreaChart(svg, points, showHolidays, weatherOn) {
+  const maxTotal = Math.max(...points.map(d => d.total)) || 1;
+  const { ticks, yMax } = computeTicks(maxTotal, 5, normMode !== 'per1000');
   const yScale = v => marginT + plotH - (v / yMax) * plotH;
   const n = points.length;
   const xScale = i => marginL + (n === 1 ? 0 : (i / (n - 1)) * plotW);
@@ -628,6 +659,10 @@ function renderAreaChart(svg, points, showHolidays) {
   });
 
   if (showHolidays) renderHolidayMarkers(svg, points, xScale, yScale);
+  if (weatherOn) {
+    renderPrecipLine(svg, points, xScale);
+    renderTempLine(svg, points, xScale);
+  }
 
   const hoverLine = el('line', { x1: 0, x2: 0, y1: marginT, y2: yScale(0), class: 'hover-line' });
   svg.appendChild(hoverLine);
@@ -657,69 +692,59 @@ function renderAreaChart(svg, points, showHolidays) {
   svg.addEventListener('pointerleave', hideTip);
 }
 
+const DAY_BAR_THRESHOLD = 150; // below this many visible days, render bars instead of area
+
+function toDisplayPoints(points) {
+  if (normMode !== 'per1000') return points;
+  return points.map(p => {
+    const fleet = fleetForYear(p.startDate.getUTCFullYear()) / 1000;
+    return { ...p, mat: p.mat / fleet, inj: p.inj / fleet, fat: p.fat / fleet, total: p.total / fleet };
+  });
+}
+
 function renderChart(range) {
   const meta = RANGE_META[range];
   const points = filterPoints(getPoints(range), currentWindow);
   const svg = document.getElementById('chart');
   const emptyMsg = document.getElementById('emptyMsg');
   clearSvg(svg);
-  document.getElementById('chartTitle').textContent = meta.chartTitle;
-  document.getElementById('chartSub').textContent = meta.chartSub;
 
-  // KPI tiles are only meaningful at week granularity (per user preference) — hidden
-  // by default on Year/Month/Day rather than shown-but-useless.
-  const showStats = range === 'week';
-  document.getElementById('normToggle').hidden = !showStats;
-  document.getElementById('statsRow').hidden = !showStats;
-  document.getElementById('normNote').hidden = !showStats || normMode !== 'per1000';
+  // KPI number tiles removed per user request, but the Absolute/Per-1,000-vehicles
+  // toggle stays visible — kept in the DOM (unused by the tiles) rather than
+  // deleted outright in case the tiles come back.
+  document.getElementById('normToggle').hidden = false;
+  document.getElementById('statsRow').hidden = true;
 
   if (points.length === 0) {
+    document.getElementById('chartTitle').textContent = meta.chartTitle;
+    document.getElementById('chartSub').textContent = meta.chartSub;
     emptyMsg.hidden = false;
     document.getElementById('statsRow').innerHTML = '';
-    renderTable(range, points, meta);
     return;
   }
   emptyMsg.hidden = true;
 
+  const useBars = meta.mode === 'bar' || (range === 'day' && points.length <= DAY_BAR_THRESHOLD);
+  document.getElementById('chartTitle').textContent = meta.chartTitle;
+  document.getElementById('chartSub').textContent = useBars
+    ? meta.chartSub.replace('Area height', 'Bar height').replace('Layers stack', 'Segments stack')
+    : meta.chartSub;
+
   const showHolidays = range === 'week' || range === 'day';
   document.getElementById('holidayLegendItem').classList.toggle('inactive', !showHolidays);
 
-  const weatherOn = range === 'week' && weatherEnabled && !!weatherMap;
-  if (weatherOn) points.forEach(p => { p.weather = weatherMap.get(`${p.isoYear}-${p.isoWeek}`) || null; });
+  const weatherOn = weatherEnabled && weatherLoaded;
+  if (weatherOn) {
+    const map = weatherMaps[range];
+    points.forEach(p => { p.weather = map.get(weatherKeyForPoint(range, p)) || null; });
+  }
   document.getElementById('weatherLegendTemp').hidden = !weatherOn;
   document.getElementById('weatherLegendPrecip').hidden = !weatherOn;
 
-  if (meta.mode === 'bar') renderBarChart(svg, points, showHolidays, weatherOn);
-  else renderAreaChart(svg, points, showHolidays);
-  renderTable(range, points, meta);
+  const displayPoints = toDisplayPoints(points);
+  if (useBars) renderBarChart(svg, displayPoints, showHolidays, weatherOn);
+  else renderAreaChart(svg, displayPoints, showHolidays, weatherOn);
   renderStats(range, points, meta);
-}
-
-function renderTable(range, points, meta) {
-  const thead = document.getElementById('tableHead');
-  const tbody = document.getElementById('tableBody');
-  thead.innerHTML = '';
-  tbody.innerHTML = '';
-
-  const headRow = document.createElement('tr');
-  [meta.colHeader, 'Property damage only', 'Injuries', 'Fatalities', 'Total'].forEach(txt => {
-    const th = document.createElement('th');
-    th.textContent = txt;
-    headRow.appendChild(th);
-  });
-  thead.appendChild(headRow);
-
-  const frag = document.createDocumentFragment();
-  points.forEach(d => {
-    const tr = document.createElement('tr');
-    [d.full + (d.partial ? '*' : ''), fmt(d.mat), fmt(d.inj), fmt(d.fat), fmt(d.total)].forEach(txt => {
-      const td = document.createElement('td');
-      td.textContent = txt;
-      tr.appendChild(td);
-    });
-    frag.appendChild(tr);
-  });
-  tbody.appendChild(frag);
 }
 
 function deltaTile(current, previous) {
@@ -1077,12 +1102,52 @@ async function applyGeoFilter() {
   renderChart(currentRange);
 }
 
+function wireHint(btnId, popoverId) {
+  const btn = document.getElementById(btnId);
+  const popover = document.getElementById(popoverId);
+  document.body.appendChild(popover); // escape any ancestor's stacking context entirely
+
+  function positionPopover() {
+    const r = btn.getBoundingClientRect();
+    const desiredLeft = r.left + r.width / 2 - popover.offsetWidth / 2;
+    const left = Math.max(8, Math.min(desiredLeft, window.innerWidth - popover.offsetWidth - 8));
+    popover.style.top = (r.bottom + 6) + 'px';
+    popover.style.left = left + 'px';
+  }
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const open = popover.hidden;
+    if (open) {
+      popover.hidden = false;
+      positionPopover();
+    } else {
+      popover.hidden = true;
+    }
+    btn.setAttribute('aria-expanded', String(open));
+  });
+  document.addEventListener('click', (e) => {
+    if (!popover.hidden && !e.composedPath().includes(btn) && !e.composedPath().includes(popover)) {
+      popover.hidden = true;
+      btn.setAttribute('aria-expanded', 'false');
+    }
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !popover.hidden) {
+      popover.hidden = true;
+      btn.setAttribute('aria-expanded', 'false');
+    }
+  });
+  window.addEventListener('resize', () => { if (!popover.hidden) positionPopover(); });
+  window.addEventListener('scroll', () => { if (!popover.hidden) positionPopover(); }, true);
+}
+
 function wireWeatherToggle() {
   const checkbox = document.getElementById('weatherCheckbox');
   const text = document.getElementById('weatherToggleText');
   checkbox.addEventListener('change', async () => {
     const turningOn = checkbox.checked;
-    if (turningOn && !weatherData) {
+    if (turningOn && !weatherLoaded) {
       text.textContent = 'Loading…';
       checkbox.disabled = true;
       try {
@@ -1102,13 +1167,13 @@ function wireWeatherToggle() {
 }
 
 function wireNormToggle() {
-  const normNote = document.getElementById('normNote');
+  const hintWrap = document.getElementById('normHintWrap');
   document.getElementById('normToggle').addEventListener('click', (e) => {
     const btn = e.target.closest('.norm-btn');
     if (!btn) return;
     normMode = btn.dataset.mode;
     document.querySelectorAll('.norm-btn').forEach(b => b.classList.toggle('active', b === btn));
-    normNote.hidden = normMode !== 'per1000';
+    hintWrap.hidden = normMode !== 'per1000';
     renderChart(currentRange);
   });
 }
@@ -1167,9 +1232,6 @@ function wireRangePicker() {
     closePopover();
     renderChart(currentRange);
   });
-  document.getElementById('toggleTable').addEventListener('click', () => {
-    document.querySelector('.table-scroll').classList.toggle('show');
-  });
 }
 
 async function init() {
@@ -1186,7 +1248,7 @@ async function init() {
   geoIndex = geoIndexData;
 
   currentWindow = clampWindow(PRESETS.find(p => p.key === 'all').compute());
-  currentRange = 'year';
+  currentRange = 'month';
 
   wireRangePicker();
   rangeTrigger.disabled = false;
@@ -1199,6 +1261,8 @@ async function init() {
 
   wireNormToggle();
   wireWeatherToggle();
+  wireHint('holidayHintBtn', 'holidayHintPopover');
+  wireHint('normHintBtn', 'normHintPopover');
 
   renderChart(currentRange);
 }
